@@ -9,6 +9,7 @@ use std::{error, fmt, io};
 
 mod timezone;
 pub(crate) use timezone::TimeZone;
+pub(crate) use timezone::LocalTimeType;
 
 mod parser;
 mod rule;

@@ -8,9 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{cell::RefCell, collections::hash_map, env, fs, hash::Hasher, time::SystemTime};
+#[allow(unused_imports)]  // Keeps the cfg simpler.
+use std::{cell::RefCell, collections::hash_map, env, fs, hash::Hasher, time::SystemTime, ffi::CStr};
+#[allow(unused_imports)]  // Keeps the cfg simpler.
+use libc::{time, localtime_r, gmtime_r, mktime, time_t, tm};
 
-use super::tz_info::TimeZone;
+#[allow(unused_imports)]  // Keeps the cfg simpler.
+use super::tz_info::{TimeZone, LocalTimeType};
 use super::{DateTime, FixedOffset, Local, NaiveDateTime};
 use crate::{Datelike, LocalResult, Utc};
 
@@ -78,10 +82,64 @@ const TZDB_LOCATION: &str = "/usr/share/lib/zoneinfo";
 #[cfg(not(any(target_os = "android", target_os = "aix")))]
 const TZDB_LOCATION: &str = "/usr/share/zoneinfo";
 
-fn fallback_timezone() -> Option<TimeZone> {
+#[cfg(not(feature = "iana-time-zone"))]
+unsafe fn libc_timezone() -> Option<TimeZone> {
+    let tmv: *mut tm = 0 as *mut tm;
+    let now = time(0 as *mut time_t);
+    // XXX: Unsafe as localtime[_r] use `getenv` and `setenv`.
+    localtime_r(&now, tmv);
+    if tmv.is_null() {
+        return None;
+    }
+    let dst = (*tmv).tm_isdst != 0;
+    let tz = CStr::from_ptr((*tmv).tm_zone).to_string_lossy();
+    let mut offset = (*tmv).tm_gmtoff;
+
+    if offset != 0 || !tz.is_empty() {
+        if let Ok(result) = TimeZone::local(Some(&tz)) {
+            return Some(result);
+        }
+        if let Ok(result) = TimeZone::fixed(offset as i32, dst) {
+            return Some(result);
+        }
+    }
+    // Not all implementations of libc populate offset and timezone.
+    // XXX: Unsafe as mktime sets tz implicitly.
+    let local_ts = mktime(tmv);
+    if local_ts == -1 {
+        return None;
+    }
+    gmtime_r(&now, tmv);
+    if tmv.is_null() {
+        return None;
+    }
+    // XXX: Unsafe as mktime sets tz implicitly.
+    let utc_ts = mktime(tmv);
+    if utc_ts == -1 {
+        return None;
+    }
+    // To the east of UTC.
+    offset = local_ts - utc_ts;
+
+    match TimeZone::fixed(offset as i32, dst) {
+        Ok(result) => return Some(result),
+        Err(_) => None
+    }
+}
+
+#[cfg(feature = "iana-time-zone")]
+fn iana_timezone() -> Option<TimeZone> {
     let tz_name = iana_time_zone::get_timezone().ok()?;
     let bytes = fs::read(format!("{}/{}", TZDB_LOCATION, tz_name)).ok()?;
-    TimeZone::from_tz_data(&bytes).ok()
+    return TimeZone::from_tz_data(&bytes).ok();
+}
+
+fn fallback_timezone() -> Option<TimeZone> {
+    #[cfg(feature = "iana-time-zone")]
+    return iana_timezone();
+    #[cfg(not(feature = "iana-time-zone"))]
+    return unsafe { libc_timezone() };
+    return None
 }
 
 impl Default for Cache {

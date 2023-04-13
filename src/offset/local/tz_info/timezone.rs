@@ -93,10 +93,10 @@ impl TimeZone {
     }
 
     /// Construct a time zone with the specified UTC offset in seconds
-    fn fixed(ut_offset: i32) -> Result<Self, Error> {
+    pub(crate) fn fixed(ut_offset: i32, dst: bool) -> Result<Self, Error> {
         Ok(Self {
             transitions: Vec::new(),
-            local_time_types: vec![LocalTimeType::with_offset(ut_offset)?],
+            local_time_types: vec![LocalTimeType::new(ut_offset, dst, None)?],
             leap_seconds: Vec::new(),
             extra_rule: None,
         })
